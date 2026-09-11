@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Минимальный клиент OneDrive через Microsoft Graph.
+"""Minimal OneDrive client via Microsoft Graph.
 
-Публичный клиент (Native / Mobile and desktop applications) — никакого
-client_secret. Вход через device code flow.
+Public client (Native / Mobile and desktop applications) — no
+client_secret. Sign-in via device code flow.
 
-Требуется: pip install -r requirements.txt
-Настройка:  export ONEDRIVE_CLIENT_ID="<ваш application (client) id>"
+Requires: pip install -r requirements.txt
+Setup:    export ONEDRIVE_CLIENT_ID="<your application (client) id>"
 """
 import os
 import sys
@@ -15,16 +15,16 @@ import msal
 import requests
 
 CLIENT_ID = os.environ.get("ONEDRIVE_CLIENT_ID", "")
-# multitenant + personal accounts. Только personal -> ".../consumers".
+# multitenant + personal accounts. Personal only -> ".../consumers".
 AUTHORITY = "https://login.microsoftonline.com/common"
 SCOPES = ["User.Read", "Files.ReadWrite", "offline_access"]
 GRAPH = "https://graph.microsoft.com/v1.0"
 
 
 def get_token():
-    """Device code flow с тихим продлением по кэшу."""
+    """Device code flow with silent renewal from the cache."""
     if not CLIENT_ID or CLIENT_ID.startswith("<"):
-        raise SystemExit("Укажите ONEDRIVE_CLIENT_ID (Application (client) ID из Entra).")
+        raise SystemExit("Set ONEDRIVE_CLIENT_ID (the Application (client) ID from Entra).")
     app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
     for account in app.get_accounts():
         result = app.acquire_token_silent(SCOPES, account=account)
@@ -32,11 +32,11 @@ def get_token():
             return result["access_token"]
     flow = app.initiate_device_flow(scopes=SCOPES)
     if "user_code" not in flow:
-        raise SystemExit(f"Не удалось начать device flow: {flow}")
-    print(flow["message"])  # открыть URL, ввести код
+        raise SystemExit(f"Could not start device flow: {flow}")
+    print(flow["message"])  # open the URL, enter the code
     result = app.acquire_token_by_device_flow(flow)
     if "access_token" not in result:
-        raise SystemExit(f"Ошибка токена: {result.get('error_description', result)}")
+        raise SystemExit(f"Token error: {result.get('error_description', result)}")
     return result["access_token"]
 
 
@@ -45,7 +45,7 @@ def auth_headers(token):
 
 
 def item_url(path):
-    """/me/drive/root:/Documents/file.txt с корректным кодированием."""
+    """/me/drive/root:/Documents/file.txt with proper encoding."""
     p = "/" + path.strip().lstrip("/")
     return f"{GRAPH}/me/drive/root:{urllib.parse.quote(p, safe='/')}"
 
@@ -55,7 +55,7 @@ def me(token):
                      params={"$select": "displayName,mail"}, timeout=30)
     r.raise_for_status()
     info = r.json()
-    print("Вошли как:", info.get("displayName"), info.get("mail"))
+    print("Signed in as:", info.get("displayName"), info.get("mail"))
 
 
 def list_dir(token, path="/", top=20):
@@ -81,28 +81,29 @@ def search(token, query, top=20):
         parent = (it.get("parentReference") or {}).get("path", "")
         print(f"{it['name']}  [{parent}]")
     if not items:
-        print("(ничего не найдено — новые файлы индексируются несколько минут)")
+        print("(nothing found — new files take a few minutes to get indexed)")
 
 
 def upload(token, local_path, remote_path):
-    """Simple upload, файлы до 4 МБ."""
+    """Simple upload, files up to 4 MB."""
     with open(local_path, "rb") as f:
         data = f.read()
     if len(data) > 4 * 1024 * 1024:
-        raise SystemExit("Simple upload поддерживает файлы только до 4 МБ.")
+        raise SystemExit("Simple upload supports files up to 4 MB only.")
     r = requests.put(item_url(remote_path) + ":/content",
                      headers={**auth_headers(token),
                               "Content-Type": "application/octet-stream"},
                      data=data, timeout=120)
     r.raise_for_status()
-    print(f"загружено -> {r.json().get('name')} ({r.json().get('size')} байт)")
+    print(f"uploaded -> {r.json().get('name')} ({r.json().get('size')} bytes)")
 
 
 def download(token, remote_path, local_path):
-    """Скачивание с ручной обработкой 302.
+    """Download with manual 302 handling.
 
-    Graph отвечает 302 на pre-authenticated URL (токен уже вшит в ссылку).
-    Authorization туда отправлять НЕЛЬЗЯ — качаем Location без заголовков.
+    Graph answers 302 to a pre-authenticated URL (the token is already
+    embedded in it). Do NOT send the Authorization header there —
+    download the Location without any headers.
     """
     r = requests.get(item_url(remote_path) + ":/content",
                      headers=auth_headers(token),
@@ -110,8 +111,8 @@ def download(token, remote_path, local_path):
     if r.status_code in (301, 302, 303, 307, 308):
         location = r.headers.get("Location")
         if not location:
-            raise SystemExit("В 302-ответе нет заголовка Location.")
-        dl = requests.get(location, timeout=180)  # без Authorization!
+            raise SystemExit("302 response has no Location header.")
+        dl = requests.get(location, timeout=180)  # no Authorization!
         dl.raise_for_status()
         data = dl.content
     else:
@@ -119,31 +120,31 @@ def download(token, remote_path, local_path):
         data = r.content
     with open(local_path, "wb") as f:
         f.write(data)
-    print(f"скачано {len(data)} байт -> {local_path}")
+    print(f"downloaded {len(data)} bytes -> {local_path}")
 
 
 def delete(token, remote_path):
     r = requests.delete(item_url(remote_path), headers=auth_headers(token), timeout=30)
     r.raise_for_status()
-    print(f"удалено {remote_path}")
+    print(f"deleted {remote_path}")
 
 
 def main():
     token = get_token()
     me(token)
 
-    print("\n-- корень OneDrive --")
+    print("\n-- OneDrive root --")
     list_dir(token)
 
-    # Круговая проверка: загрузить -> скачать -> сравнить -> удалить
+    # Round trip: upload -> download -> compare -> delete
     probe_remote = "/Documents/__graph_example_probe.txt"
     with open("/tmp/__probe.txt", "w") as f:
         f.write("probe: Microsoft Graph public client works\n")
-    print("\n-- круговая проверка --")
+    print("\n-- round trip --")
     upload(token, "/tmp/__probe.txt", probe_remote)
     download(token, probe_remote, "/tmp/__probe_back.txt")
     same = open("/tmp/__probe.txt", "rb").read() == open("/tmp/__probe_back.txt", "rb").read()
-    print("байты совпадают:", same)
+    print("bytes match:", same)
     delete(token, probe_remote)
 
 

@@ -1,137 +1,139 @@
-# OneDrive через Microsoft Graph: подключение публичного клиента
+# OneDrive via Microsoft Graph: connecting a public client
 
-Как подключить свой OneDrive к собственному приложению или скрипту через Microsoft Graph API — **без `client_secret`**, и какие грабли мы собрали по дороге, пока это заработало.
+> Russian version: [README.ru.md](README.ru.md)
 
-## TL;DR — рабочая конфигурация
+How to connect your OneDrive to your own app or script via the Microsoft Graph API — **without a `client_secret`** — and the mistakes we made along the way before it worked.
+
+## TL;DR — the working configuration
 
 - Entra ID → App registrations → New registration
-- **Supported account types:** `Accounts in any organizational directory (Any Microsoft Entra ID directory - Multitenant) and personal Microsoft accounts` — если входите личным аккаунтом (`@outlook.com`, `@hotmail.com`, `@live.com`)
-- **Платформа:** `Mobile and desktop applications` (Native-клиент, public client — секрета нет и не нужен)
-- **Redirect URI:** `https://login.microsoftonline.com/common/oauth2/nativeclient` (для device code flow URI не используется, но сама платформа должна быть добавлена)
+- **Supported account types:** `Accounts in any organizational directory (Any Microsoft Entra ID directory - Multitenant) and personal Microsoft accounts` — if you sign in with a personal account (`@outlook.com`, `@hotmail.com`, `@live.com`)
+- **Platform:** `Mobile and desktop applications` (Native client, public client — no secret, none needed)
+- **Redirect URI:** `https://login.microsoftonline.com/common/oauth2/nativeclient` (not actually used by the device code flow, but the platform must be added)
 - **Authentication → Allow public client flows: Yes**
 - **API permissions (Delegated):** `User.Read`, `Files.ReadWrite`
-- **Authority/endpoint:** `https://login.microsoftonline.com/common` (multitenant + personal) или `/consumers` (только personal) — **не** tenant-specific URL
+- **Authority/endpoint:** `https://login.microsoftonline.com/common` (multitenant + personal) or `/consumers` (personal only) — **not** a tenant-specific URL
 - **Scopes:** `offline_access User.Read Files.ReadWrite`
 
-## Пошаговая регистрация приложения
+## Step-by-step app registration
 
-1. Открыть https://entra.microsoft.com → **Identity** → **Applications** → **App registrations** → **New registration**.
-2. **Name** — любое, например `My OneDrive App`.
-3. **Supported account types** — выбрать `Accounts in any organizational directory (Any Microsoft Entra ID directory - Multitenant) and personal Microsoft accounts (e.g. Skype, Xbox)`.
-4. Redirect URI на этом шаге можно пропустить — платформу добавим дальше.
-5. **Register** → на странице Overview скопировать **Application (client) ID** — это ваш `client_id`.
-6. Слева **Authentication** → **Add a platform** → **Mobile and desktop applications** → отметить `https://login.microsoftonline.com/common/oauth2/nativeclient` → **Configure**.
-7. На той же странице внизу: **Allow public client flows → Yes** → **Save**.
-8. Слева **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated permissions** → отметить `User.Read` и `Files.ReadWrite` → **Add permissions**.
-9. Для делегированных разрешений и личного аккаунта admin consent не требуется — можно сразу пользоваться.
+1. Go to https://entra.microsoft.com → **Identity** → **Applications** → **App registrations** → **New registration**.
+2. **Name** — anything, e.g. `My OneDrive App`.
+3. **Supported account types** — select `Accounts in any organizational directory (Any Microsoft Entra ID directory - Multitenant) and personal Microsoft accounts (e.g. Skype, Xbox)`.
+4. You can skip the Redirect URI for now — we'll add the platform next.
+5. **Register** → on the Overview page copy the **Application (client) ID** — that's your `client_id`.
+6. On the left, **Authentication** → **Add a platform** → **Mobile and desktop applications** → check `https://login.microsoftonline.com/common/oauth2/nativeclient` → **Configure**.
+7. On the same page, at the bottom: **Allow public client flows → Yes** → **Save**.
+8. On the left, **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated permissions** → check `User.Read` and `Files.ReadWrite` → **Add permissions**.
+9. For delegated permissions with a personal account, no admin consent is needed — you can start using it right away.
 
-## Почему не Web и не SPA: наши ошибки
+## Why not Web or SPA: the errors we hit
 
-Мы перебрали три типа платформы, прежде чем OAuth заработал. Каждая давала свою характерную ошибку — по ним легко понять, что не так.
+We went through three platform types before OAuth worked. Each one fails with a characteristic error, which makes diagnosis easy.
 
-### Ошибка 1: платформа Web → `AADSTS70002`
+### Error 1: Web platform → `AADSTS70002`
 
-Если в **Authentication** добавлена платформа **Web**, приложение считается confidential client. При обмене authorization code на токен Microsoft требует секрет:
+If you add the **Web** platform under **Authentication**, the app is treated as a confidential client. When redeeming the authorization code for a token, Microsoft demands a secret:
 
 ```
 AADSTS70002: The request body must contain the following parameter:
 'client_assertion' or 'client_secret'.
 ```
 
-Для личного скрипта или агента хранить секрет не хочется и не нужно. Лечение: убрать платформу Web, сделать приложение публичным клиентом (секрет не требуется в принципе).
+For a personal script or agent you don't want to store a secret — and you don't need to. Fix: remove the Web platform and make it a public client (no secret required at all).
 
-### Ошибка 2: платформа SPA → `AADSTS90023`
+### Error 2: SPA platform → `AADSTS90023`
 
-Убрали Web, поставили **Single-page application** — требование секрета пропало, но token endpoint стал отвечать:
+We removed Web and set **Single-page application** — the secret requirement went away, but the token endpoint started responding with:
 
 ```
 AADSTS90023: Cross-origin token redemption is permitted only for the
 'Single-Page Application' client-type.
 ```
 
-Перевод: тип SPA разрешает обмен кода на токен **только из браузера** (запрос должен прийти с `Origin`-заголовком, cross-origin). Код, выполняющийся не в браузере (сервер, скрипт, агент), получает отказ. Настройками это не лечится — только сменой типа платформы.
+Translation: the SPA type only allows code-for-token redemption **from a browser** (the request must come with an `Origin` header, cross-origin). Code running outside a browser (a server, script, or agent) gets rejected. No setting fixes this — only changing the platform type.
 
-### Решение: Native (Mobile and desktop applications)
+### The fix: Native (Mobile and desktop applications)
 
-Платформа **Mobile and desktop applications** — это public client без секрета, которому разрешён обмен кода вне браузера (authorization code + PKCE, device code flow). После перехода с SPA на Native OAuth прошёл с первого раза, больше ничего менять не пришлось.
+The **Mobile and desktop applications** platform is a public client with no secret that is allowed to redeem codes outside the browser (authorization code + PKCE, device code flow). After switching from SPA to Native, OAuth worked on the first try — nothing else needed changing.
 
-### Ошибка 3: `AADSTS50020` — не тот tenant / не те типы аккаунтов
+### Error 3: `AADSTS50020` — wrong tenant / wrong account types
 
 ```
 AADSTS50020: User account '...' from identity provider 'live.com' does not
 exist in tenant '...'
 ```
 
-Две возможные причины:
+Two possible causes:
 
-1. В регистрации стоит **Single tenant**, а вход выполняется личным аккаунтом. Лечение — выбрать **Multitenant + personal Microsoft accounts** (см. шаг 3 выше).
-2. В коде используется tenant-specific endpoint `https://login.microsoftonline.com/<tenant-id>/...`. Для такого сценария нужен `https://login.microsoftonline.com/common` (multitenant + personal) или `https://login.microsoftonline.com/consumers` (только personal).
+1. The registration is set to **single tenant** while you sign in with a personal account. Fix — select **Multitenant + personal Microsoft accounts** (step 3 above).
+2. Your code uses a tenant-specific endpoint `https://login.microsoftonline.com/<tenant-id>/...`. For this scenario use `https://login.microsoftonline.com/common` (multitenant + personal) or `https://login.microsoftonline.com/consumers` (personal only).
 
-## Получение токена: device code flow
+## Getting a token: device code flow
 
-Самый простой способ для скрипта — не нужен ни веб-сервер, ни redirect URI:
+The simplest approach for a script — no web server or redirect URI needed:
 
 ```python
 import msal
 
 app = msal.PublicClientApplication(
-    client_id="<ваш application (client) id>",
+    client_id="<your application (client) id>",
     authority="https://login.microsoftonline.com/common",
 )
 flow = app.initiate_device_flow(scopes=["User.Read", "Files.ReadWrite", "offline_access"])
-print(flow["message"])  # открыть URL из сообщения, ввести код
+print(flow["message"])  # open the URL from the message, enter the code
 result = app.acquire_token_by_device_flow(flow)
 access_token = result["access_token"]
 ```
 
-Токен живёт ~час; `offline_access` в скоупах даёт refresh token, `acquire_token_silent` продлевает сессию без участия пользователя.
+Tokens live ~1 hour; `offline_access` in the scopes gives you a refresh token, and `acquire_token_silent` renews the session without user interaction.
 
-## Основные вызовы Graph
+## Key Graph calls
 
-База: `https://graph.microsoft.com/v1.0`, заголовок `Authorization: Bearer <access_token>`.
+Base: `https://graph.microsoft.com/v1.0`, header `Authorization: Bearer <access_token>`.
 
-| Что | Запрос |
+| What | Request |
 |---|---|
-| Проверка токена | `GET /me` |
-| Корень OneDrive | `GET /me/drive/root/children` |
-| Поиск | `GET /me/drive/root/search(q='договор')` |
-| Скачать файл | `GET /me/drive/root:/Documents/file.txt:/content` |
-| Загрузить файл (≤ 4 МБ) | `PUT /me/drive/root:/Documents/file.txt:/content` |
-| Удалить | `DELETE /me/drive/root:/Documents/file.txt` |
+| Verify the token | `GET /me` |
+| OneDrive root | `GET /me/drive/root/children` |
+| Search | `GET /me/drive/root/search(q='contract')` |
+| Download a file | `GET /me/drive/root:/Documents/file.txt:/content` |
+| Upload a file (≤ 4 MB) | `PUT /me/drive/root:/Documents/file.txt:/content` |
+| Delete | `DELETE /me/drive/root:/Documents/file.txt` |
 
-Пути вида `/me/drive/root:/Documents/Отчёт.pdf` нужно URL-кодировать (кроме `/`).
+Paths like `/me/drive/root:/Documents/Report.pdf` need URL-encoding (except `/`).
 
-### Грабли со скачиванием: 302 на чужой хост
+### The download gotcha: 302 to another host
 
-`GET ...:/content` **не возвращает файл сразу** — он отвечает **302** на хост вида `*.my.microsoftpersonalcontent.com`. Это pre-authenticated ссылка: токен уже вшит в URL.
+`GET ...:/content` does **not** return the file directly — it responds with **302** to a host like `*.my.microsoftpersonalcontent.com`. That's a pre-authenticated URL: the token is already embedded in it.
 
-**Не отправляйте туда заголовок `Authorization`.** Он там не нужен, а его присутствие ломает скачивание (у нас запрос просто висел до таймаута). Правильно:
+**Do not send your `Authorization` header there.** It's not needed, and its presence breaks the download (in our case the request just hung until timeout). The correct approach:
 
-1. Запросить `...:/content` с запретом авто-редиректов.
-2. Взять `Location` из ответа.
-3. Скачать `Location` **без** заголовка `Authorization`.
+1. Request `...:/content` with automatic redirects disabled.
+2. Take the `Location` from the response.
+3. Download the `Location` **without** the `Authorization` header.
 
-В `requests` это почти из коробки (библиотека сама снимает `Authorization` при редиректе на другой хост), но надёжнее обработать 302 вручную — см. функцию `download()` в `example/graph_client.py`.
+With `requests` this almost works out of the box (it strips `Authorization` on cross-host redirects), but handling the 302 manually is more reliable — see the `download()` function in `example/graph_client.py`.
 
-### Нюанс поиска
+### Search caveat
 
-`search(q='...')` ищет по поисковому индексу OneDrive, а не по живой файловой системе. Свежезагруженный файл появляется в выдаче **через несколько минут** — это нормально, не баг вашего кода.
+`search(q='...')` queries OneDrive's search index, not the live filesystem. A freshly uploaded file shows up in results **after a few minutes** — that's normal, not a bug in your code.
 
-## Пример
+## Example
 
-`example/graph_client.py` — минимальный рабочий клиент на `msal` + `requests`:
+`example/graph_client.py` — a minimal working client using `msal` + `requests`:
 
-- вход через device code flow (с кэшем токена),
-- `me`, список файлов в корне, поиск,
-- загрузка, скачивание (с ручной обработкой 302), удаление.
+- sign-in via device code flow (with token cache),
+- `me`, listing files, search,
+- upload, download (with manual 302 handling), delete.
 
 ```bash
 pip install -r requirements.txt
-export ONEDRIVE_CLIENT_ID="<ваш application (client) id>"
+export ONEDRIVE_CLIENT_ID="<your application (client) id>"
 python example/graph_client.py
 ```
 
-## Полезные ссылки
+## Further reading
 
-- Разбор `AADSTS90023` (cross-origin token redemption): https://learn.microsoft.com/en-us/answers/questions/588174/microsoft-devicecode-authentication-returning-inva
-- Разбор `AADSTS50020` (аккаунт не найден в tenant): https://learn.microsoft.com/en-us/answers/questions/2203176/issue-with-microsoft-oauth-for-outlook-aadsts50020
+- `AADSTS90023` explained (cross-origin token redemption): https://learn.microsoft.com/en-us/answers/questions/588174/microsoft-devicecode-authentication-returning-inva
+- `AADSTS50020` explained (account not found in tenant): https://learn.microsoft.com/en-us/answers/questions/2203176/issue-with-microsoft-oauth-for-outlook-aadsts50020
